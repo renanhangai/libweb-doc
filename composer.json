@@ -1,0 +1,15 @@
+{
+    "name": "renanhangai/libweb-doc",
+    "description": "LibWeb documentator",
+    "type": "library",
+    "authors": [
+        {
+            "name": "renanhangai",
+            "email": "hangai.renan@gmail.com"
+        }
+    ],
+    "require": {},
+	"autoload": {
+		"classmap": [ "src" ]
+	}
+}
