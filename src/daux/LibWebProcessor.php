@@ -113,8 +113,6 @@ class LibWebProcessor extends \Todaymade\Daux\Processor {
 			}
 			$desc .= $description."\n\n\n</div>\n\n\n";
 
-			echo $desc, "\n";
-			
 			$desc .= "```\n".$method->code."\n```";
 			$content[] = $desc;
 		}
