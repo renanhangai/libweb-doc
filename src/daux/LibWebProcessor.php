@@ -103,23 +103,37 @@ class LibWebProcessor extends \Todaymade\Daux\Processor {
 			if ( !trim( str_replace( "\n", "", $description ) ) )
 				$description = "&nbsp;";
 			
-			$desc = "### **".$method->method.'** '.$method->name."\n\n";
+			$desc = "### **".$method->method.'** '.$method->name."\n\n\n<div class=\"s-content__block\">\n\n\n";
 
 			if ( $method->params ) {
-				$desc .= "- **Params**\n";
+				$desc .= "**Params**\n";
 				foreach ( $method->params  as $name => $param ) {
-					$desc .= "  ".str_repeat( "  ", $param->offset )."- *{$name}*: {$param->description}\n";
+					$desc .= str_repeat( "  ", $param->offset )."- *{$name}*: {$param->description}\n";
 				}
 			}
-					
-				
+			$desc .= $description."\n\n\n</div>\n\n\n";
+
+			echo $desc, "\n";
 			
-			$desc .= $description."\n";
 			$desc .= "```\n".$method->code."\n```";
 			$content[] = $desc;
 		}
 
-		$page->setContent( implode( "\n", $content ) );
+		$style = "\n\n<style>.Columns__right--float .s-content .s-content__block { 
+float: left;
+clear: left;
+width: 47%;
+margin-left: 1.5%;
+margin-right: 1.5%;
+}
+.s-content .s-content__block p, .s-content .s-content__block ul { 
+width: auto;
+}
+.s-content .s-content__block p { 
+margin-bottom: 0;
+}
+</style>\n\n";
+		$page->setContent( $style.implode( "\n", $content ) );
 	}
 
 	/**
