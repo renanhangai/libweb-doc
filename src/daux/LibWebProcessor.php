@@ -3,9 +3,15 @@ namespace Todaymade\Daux\Extension;
 
 use Todaymade\Daux\Tree\Root;
 use Todaymade\Daux\Tree\Builder;
+use PhpParser\ParserFactory;
+use Webmozart\PathUtil\Path;
+use Webmozart\Glob\Glob;
 
 class LibWebProcessor extends \Todaymade\Daux\Processor {
-	
+
+	/**
+	 * Create the API tree
+	 */
 	public function manipulateTree(Root $root) {
 		
 		$config = $root->getConfig();
@@ -13,21 +19,59 @@ class LibWebProcessor extends \Todaymade\Daux\Processor {
 		if ( !$config )
 			return;
 
-		$namespace = $config["namespace"];
+		$namespace = @$config["namespace"];
 		if ( !$namespace )
 			return;
+
+		// Include files
+		if ( isset( $config["include"] ) ) {
+			$baseDir = $this->daux->getParams()->getDocumentationDirectory();
+			$path    = is_array( $config["include"] ) ? $config["include"] : array( $config["include"] );
+
+			$files  = array();
+			$ignore = array();
+			foreach ( array_reverse( $path ) as $p ) {
+				if ( $p[0] === '!' ) {
+					$ignore[] = Path::makeAbsolute( substr( $p, 1 ), $baseDir );
+					continue;
+				}
+
+				$thisFiles = Glob::glob( Path::makeAbsolute( $p, $baseDir ) );
+				$thisFiles = array_filter( $thisFiles, function( $file ) use ( $ignore ) {
+					foreach ( $ignore as $i ) {
+						if ( Glob::match($file, $i) )
+							return false;
+					}
+					return true;
+				});
+				$files += $thisFiles;
+			}
+			   
+			foreach ( $files as $file )
+				require_once $file;
+		}
 		
 		$composer = require "vendor/autoload.php";
-		$classmap = $composer->getClassMap();
-		foreach ( $classmap as $class => $file ) {
+		$classmap = array_keys( $composer->getClassMap() );
+
+		$classes = get_declared_classes() + $classmap;
+
+		$processed = array();
+		foreach ( $classes as $class ) {
+			if ( isset( $processed[$class]) )
+				continue;
 			if ( substr( $class, 0, strlen($namespace) ) !== $namespace )
 				continue;
+			$processed[ $class ] = true;
 
 			$relative = substr( $class, strlen( $namespace ) );
 			$this->setupAPI( $root, $class, $relative );
 		}
 	}
-	
+
+	/**
+	 * Setup an API object
+	 */
 	private function setupAPI( $root, $class, $relative ) {
 		if ( $relative === 'API' )
 			return;
@@ -46,6 +90,9 @@ class LibWebProcessor extends \Todaymade\Daux\Processor {
 		$this->setupAPIFromReflection( $page, $reflection );
 	}
 
+	/**
+	 * Create a new page from a Reflection class
+	 */
 	private function setupAPIFromReflection( $page, $reflectionClass ) {
 		$content = array();
 
@@ -57,6 +104,16 @@ class LibWebProcessor extends \Todaymade\Daux\Processor {
 				$description = "&nbsp;";
 			
 			$desc = "### **".$method->method.'** '.$method->name."\n\n";
+
+			if ( $method->params ) {
+				$desc .= "- **Params**\n";
+				foreach ( $method->params  as $name => $param ) {
+					$desc .= "  ".str_repeat( "  ", $param->offset )."- *{$name}*: {$param->description}\n";
+				}
+			}
+					
+				
+			
 			$desc .= $description."\n";
 			$desc .= "```\n".$method->code."\n```";
 			$content[] = $desc;
@@ -65,6 +122,9 @@ class LibWebProcessor extends \Todaymade\Daux\Processor {
 		$page->setContent( implode( "\n", $content ) );
 	}
 
+	/**
+	 * Parse every method trying to find APIs
+	 */
 	private function parseMethods( $reflectionClass ) {
 		$methods = array();
 		foreach ( $reflectionClass->getMethods() as $method ) {
@@ -73,12 +133,14 @@ class LibWebProcessor extends \Todaymade\Daux\Processor {
 			if ( !preg_match( '/(POST|GET)_(\w+)/', $name, $matches ) )
 				continue;
 
-			$methods[] = (object) array(
+			$desc = (object) array(
 				"name"        => mb_strtolower( preg_replace( "/([a-z])([A-Z])/", '$1-$2', $matches[2] ) ),
 				"method"      => $matches[1],
 				"description" => $this->parseDocComment( $method->getDocComment() ),
 				"code"        => $this->getMethodCode( $method ),
 			);
+			$desc->params = $this->getMethodParams( $desc );
+			$methods[] = $desc;
 		}
 		usort( $methods, function( $a, $b ) {
 			$method = strcmp( $a->method, $b->method );
@@ -89,6 +151,9 @@ class LibWebProcessor extends \Todaymade\Daux\Processor {
 		return $methods;
 	}
 
+	/**
+	 * Parse the doc comment
+	 */
 	private function parseDocComment( $comment ) {
 		$comment = substr( $comment, 3, -2 );
 
@@ -105,7 +170,10 @@ class LibWebProcessor extends \Todaymade\Daux\Processor {
 		
 		return implode( "\n", $lines );
 	}
-	
+
+	/**
+	 * Get the code from the method
+	 */
 	private function getMethodCode( $method ) {
 		$lines = file( $method->getFileName() );
 		$code = array_slice( $lines, $method->getStartLine(), $method->getEndLine() - $method->getStartLine() - 1 );
@@ -129,5 +197,101 @@ class LibWebProcessor extends \Todaymade\Daux\Processor {
 		}
 		
 		return implode( "", $code );
+	}
+	/**
+	 * Get the method parameters
+	 */
+	private function getMethodParams( $desc ) {
+		$parser = (new ParserFactory)->create(ParserFactory::PREFER_PHP7);
+		$code   = "<?php\n".$desc->code;
+		$ast = $parser->parse( $code );
+		$params = array();
+		self::getMethodParamsFromAST( $params, $ast, explode( "\n", $code ) );
+		return $params;
+	}
+	/**
+	 *
+	 */
+	private static function getMethodParamsFromAST( &$params, $node, $lines ) {
+		if ( is_array( $node ) ) {
+			foreach ( $node as $childNode )
+				self::getMethodParamsFromAST( $params, $childNode, $lines );
+			return;
+		}
+
+		if ( $node instanceof \PhpParser\Node\Expr\MethodCall ) {
+			if ( $node->name == 'param' ) {
+				$line = trim( $lines[$node->getLine() - 1 ] );
+				$key = $node->args[0]->value->value;
+				if ( count($node->args) >= 3 )
+					$param = self::parseParam( $key, $node->args[2]->value, $line );
+				else
+					$param = self::parseParam( $key, @$node->args[1] ? $node->args[1]->value : null, $line );
+
+				$params[ $key ] = $param;
+
+				self::parseParamNode( $params, $param->key, $param->validator, $lines, 1 );
+				return;
+			} else if ( $node->name == 'params' ) {
+				foreach ( $node->args[0]->value->items as $item ) {
+					$line  = trim( $lines[$item->getLine() - 1 ] );
+					$key   = $item->key->value;
+					$param = self::parseParam( $key, $item->value, $line );
+					$params[ $key ] = $param;
+					
+					self::parseParamNode( $params, $param->key, $param->validator, $lines, 1 );
+				}
+				return;
+			}
+		}
+
+		if ( isset( $node->expr ) )
+			self::getMethodParamsFromAST( $params, $node->expr, $lines );
+		if ( isset( $node->args ) ) {
+			foreach ( $node->args as $childNode )
+				self::getMethodParamsFromAST( $params, $childNode->value, $lines );
+		}
+		
+	}
+	/**
+	 * Faz o parse do parametro
+	 */
+	private static function parseParamNode( &$params, $prefix, $node, $lines, $offset = 0 ) {
+		if ( !$node )
+			return;
+		
+		if ( $node instanceof \PhpParser\Node\Expr\Array_ ) {
+			foreach ( $node->items as $item ) {
+				$line  = trim( $lines[$item->getLine() - 1 ] );
+				$key   = ( $prefix ? $prefix."." : "").$item->key->value;
+				$subparam = self::parseParam( $key, $item->value, $line, $offset );
+				$params[ $key ] = $subparam;
+					
+				self::parseParamNode( $params, $key, $subparam->validator, $lines, $offset + 1 );
+			}
+		} else if ( $node instanceof \PhpParser\Node\Expr\StaticCall ) {
+			if ( $node->class->parts !== array( "v" ) )
+				return;
+			if ( $node->name === 'arrayOf' )
+				self::parseParamNode( $params, $prefix."[n]", $node->args[0]->value, $lines, $offset + 1  );
+		}
+	}
+
+	/**
+	 * Faz o parse do parametro
+	 */
+	private static function parseParam( $key, $validatorNode, $line, $offset = 0 ) {
+		$param = (object) array(
+			"key"         => $key,
+			"validator"   => $validatorNode,
+			"offset"      => $offset,
+			"description" => "",
+		);
+		if ( preg_match( "/\/\/(.*)?$/", $line, $matches ) ) {
+			$param->description = trim( $matches[1] );
+		} else if ( preg_match( "/\/\*(.*?)\*\/$/", $line, $matches ) ) {
+			$param->description = trim( $matches[1] );
+		}
+		return $param;
 	}
 };

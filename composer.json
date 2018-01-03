@@ -8,7 +8,11 @@
 			"email": "hangai.renan@gmail.com"
 		}
 	],
-	"require": {},
+	"require": {
+		"nikic/php-parser": "^3.1",
+		"webmozart/path-util": "^2.3",
+		"webmozart/glob": "^4.1"
+	},
 	"autoload": {
 		"classmap": [
 			"src"
